@@ -1,0 +1,23 @@
+[package]
+name = "sheetapi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7.9", default-features = false, features = ["json"] }
+axum_typed_multipart = "0.14.0"
+bson = { version = "2.13.0", features = ["chrono-0_4"] }
+dotenv = "0.15.0"
+mongodb = { version = "3.1.1", features = ["zstd-compression", "snappy-compression", "zlib-compression"] }
+redis = "0.27.6"
+serde = { version = "1.0.216", features = ["derive"] }
+serde_json = { version = "1.0.134", features = ["indexmap", "preserve_order"] }
+serde_with = { version = "3.12.0", features = ["json", "indexmap", "chrono"] }
+spreadsheet-to-json = "0.1.12"
+tempfile = "3.14.0"
+tokio = { version = "1.42.0", features = ["full"] }
+tower-http = { version = "0.6.2", features = ["cors"] }
+
+
+[patch.crates-io]
+spreadsheet-to-json = { path = "../spreadsheet_to_json" }
