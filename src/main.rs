@@ -8,9 +8,6 @@ use serde_json::json;
 use tokio::time::sleep;
 use std::io::Error;
 use std::time::{Duration, SystemTime};
-use std::thread;
-use serde::Deserialize;
-use serde_with::skip_serializing_none;
 use spreadsheet_to_json::simple_string_patterns::ToSegments;
 use spreadsheet_to_json::{process_spreadsheet_immediate, Column, OptionSet, ReadMode};
 use std::fs;
@@ -226,7 +223,7 @@ fn scan_files_for_deletion(files: fs::ReadDir, delete_after_seconds: u64) -> Res
 
 fn get_tmp_and_sub_directories() -> (String, String) {
   let tmp_dir = dotenv::var("TMP_FILE_DIR").unwrap_or(String::from("/tmp"));
-  let sub_dir = dotenv::var("SPREADSHEET_SUBDIR").unwrap_or(String::from("/tmp"));
+  let sub_dir = dotenv::var("SPREADSHEET_SUBDIR").unwrap_or(String::from("sheets"));
   (tmp_dir, sub_dir)
 }
 
