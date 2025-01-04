@@ -86,7 +86,7 @@ pub async fn welcome() -> impl IntoResponse {
           },
           "process": {
               "method": "PUT",
-              "path": "/process","type": "multipart/form-data",
+              "path": "/process","type": "application/json",
               "parameters": {
                 "filename": "The assigned name of the temporary file",
                 "mode": "The read mode to use (sync or preview)",

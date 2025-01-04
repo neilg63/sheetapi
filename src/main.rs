@@ -8,7 +8,7 @@ use tower_http::cors::{CorsLayer, Any};
 mod files;
 mod options;
 mod routes;
-// mod db;
+mod db;
 
 use routes::*;
 
