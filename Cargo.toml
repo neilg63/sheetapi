@@ -13,11 +13,11 @@ redis = "0.27.6"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = { version = "1.0.134", features = ["indexmap", "preserve_order"] }
 serde_with = { version = "3.12.0", features = ["json", "indexmap", "chrono"] }
-spreadsheet-to-json = "0.1.12"
-tempfile = "3.14.0"
+spreadsheet-to-json = "0.1.14"
+tempfile = "3.15.0"
 tokio = { version = "1.42.0", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["cors"] }
 
 
-[patch.crates-io]
-spreadsheet-to-json = { path = "../spreadsheet_to_json" }
+# [patch.crates-io]
+# spreadsheet-to-json = { path = "../spreadsheet_to_json" }
