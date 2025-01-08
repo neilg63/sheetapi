@@ -3,7 +3,7 @@ use std::str::FromStr;
 use bson::{doc, oid::ObjectId, Document};
 use serde::{Deserialize, Serialize};
 use axum_typed_multipart::{FieldData, TryFromMultipart};
-use spreadsheet_to_json::simple_string_patterns::ToSegments;
+use spreadsheet_to_json::{heck::ToSnakeCase, simple_string_patterns::{IsNumeric, StripCharacters, ToSegments}};
 use tempfile::NamedTempFile;
 
 #[derive(TryFromMultipart, Debug)]
@@ -30,6 +30,15 @@ pub struct CoreOptions {
   pub header_index: Option<usize>,
   pub dataset_id: Option<String>,
   pub import_id: Option<String>,
+}
+
+fn listing_limit() -> u64 {
+  if let Ok(listing_limit_val) = dotenv::var("LISTING_LIMIT") {
+    if let Ok(limit_val) = listing_limit_val.parse::<u64>() {
+      return limit_val;
+    }
+  }
+  10_000
 }
 
 impl CoreOptions {
@@ -92,7 +101,7 @@ impl DataSetMatcher {
       DataSetMatcher::NameIndex(name, index) => {
         doc! {
           "name": name,
-          "index": index,
+          "sheet_index": index,
         }
       },
       DataSetMatcher::Id(id) => {
@@ -112,6 +121,9 @@ pub struct QueryFilterParams {
     pub f: Option<String>,
     pub v: Option<String>,
     pub o: Option<String>,
+    pub sort: Option<String>,
+    pub dir: Option<String>,
+    pub import: Option<String>,
     pub start: Option<u64>,
     pub limit: Option<u64>,
 }
@@ -121,7 +133,7 @@ impl QueryFilterParams {
         let mut criteria = doc! {};
         if let Some(field) = self.f.clone() {
             if let Some(value) = self.v.clone() {
-                let operator = self.o.clone().unwrap_or("eq".to_string());
+                let operator = self.o.clone().unwrap_or("eq".to_string()).to_lowercase().strip_non_alphanum();
                 let value = match operator.as_str() {
                     "ne" => doc! { "$ne": value },
                     "gt" => doc! { "$gt": value },
@@ -130,9 +142,11 @@ impl QueryFilterParams {
                     "lte" => doc! { "$lte": value },
                     "in" => doc! { "$in": value.to_parts(",") },
                     "nin" => doc! { "$nin": value.to_parts(",") },
-                    "r" | "regex" => doc! { "$regex": value, "$options": "i" },
-                    "starts" | "starts_with" => doc! { "$regex": format!("^{}",value.trim()), "$options": "i" },
-                    "ends" | "ends_with" => doc! { "$regex": format!("{}$",value.trim()), "$options": "i" },
+                    "r" | "regex" | "regexp" | "rgx" => doc! { "$regex": value, "$options": "i" },
+                    "rcs" | "rc" | "regexc" | "regexpc" | "rgxc" => doc! { "$regex": value },
+                    "like" | "l" => doc! { "$regex": format!("^\\s*{}\\s*$",value.trim()), "$options": "i" },
+                    "starts" | "startswith" => doc! { "$regex": format!("^{}",value.trim()), "$options": "i" },
+                    "ends" | "endswith" => doc! { "$regex": format!("{}$",value.trim()), "$options": "i" },
                     _ => doc! { "$eq": value },
                 };
                 criteria = doc! { format!("data.{}", field): value };
@@ -143,6 +157,46 @@ impl QueryFilterParams {
         } else {
             Some(criteria)
         }
+    }
+
+    pub fn to_sort_criteria(&self) -> Option<Document> {
+        if let Some(sort) = self.sort.clone() {
+            let dir_key = self.dir.clone().unwrap_or("asc".to_string()).trim().to_lowercase();
+            let dir = match dir_key.as_str() {
+                "asc" => 1,
+                "desc" => -1,
+                _ => {
+                    if dir_key.is_numeric() {
+                      if let Ok(num_val) = dir_key.parse::<i32>() {
+                          if num_val < 0 {
+                            -1
+                          } else {
+                            1
+                          }
+                      } else {
+                        1
+                      }
+                  } else if dir_key.starts_with("desc") || dir_key.starts_with("down") || dir_key.starts_with("dsc") {
+                    -1
+                  } else {
+                    1
+                  }
+                }
+            };
+            Some(doc! { format!("data.{}", sort): dir })
+        } else {
+            None
+        }
+    }
+
+    pub fn to_pagination(&self) -> (u64, u64) {
+        let start = self.start.unwrap_or(0);
+        let mut limit = self.limit.unwrap_or(100);
+        let max = listing_limit();
+        if limit > max {
+            limit = max;
+        }
+        (start, limit)
     }
     
 }

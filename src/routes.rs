@@ -3,17 +3,13 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-
-use crate::files::*;
-use crate::{db::DB, options::*};
+use crate::{db::get_db_instance, files::*, options::*};
 use axum_typed_multipart::TypedMultipart;
 use serde_json::{json, Value};
 use spreadsheet_to_json::{
     process_spreadsheet_immediate, simple_string_patterns::ToSegments, OptionSet, ReadMode,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[axum::debug_handler]
 pub async fn upload_asset(
@@ -78,9 +74,11 @@ pub async fn check_file(PathParam(file_name): PathParam<String>) -> impl IntoRes
 }
 
 pub async fn get_dataset(PathParam(id): PathParam<String>, Query(params): Query<QueryFilterParams>) -> impl IntoResponse {
-    let db = DB::new().await;
+    let db = get_db_instance().await;
     let criteria = params.to_criteria();
-    let data = db.fetch_dataset(&id, None, criteria, 10000, 0).await;
+    let (start, limit) = params.to_pagination();
+    let sort_criteria = params.to_sort_criteria();
+    let data = db.fetch_dataset(&id, None, criteria, limit, start, sort_criteria).await;
     let response = json!( data);
     (StatusCode::OK, Json(response))
 }
@@ -93,7 +91,7 @@ pub async fn welcome() -> impl IntoResponse {
                 "method": "POST",
                 "path": "/upload",
                 "type": "multipart/form-data",
-                "parameters": {
+                "params": {
                   "file": "The spreadsheet file to upload",
                   "mode": "The read mode to use (sync or preview)",
                   "max": "The maximum number of rows to read",
@@ -108,7 +106,7 @@ pub async fn welcome() -> impl IntoResponse {
             "process": {
                 "method": "PUT",
                 "path": "/process","type": "application/json",
-                "parameters": {
+                "params": {
                   "filename": "The assigned name of the temporary file",
                   "mode": "The read mode to use (sync or preview)",
                   "max": "The maximum number of rows to read",
@@ -117,6 +115,23 @@ pub async fn welcome() -> impl IntoResponse {
                   "cols": "Column settings",
                   "sheet_index": "The index of the sheet to read",
                   "header_index": "The index of the header row"
+                },
+                "description": "Re-process an uploaded spreadsheet file with new criteria"
+            },
+            "dataset": {
+                "method": "GET",
+                "path": "/dataset/:dataset_id",
+                "path_params": {
+                  ":dataset_id": "The ID of the dataset to retrieve"
+                },
+                "query_params": {
+                  "f": "Field name (snake_cased)",
+                  "v": "Field value",
+                  "o": "Comparison operator (eq, ne, gt, gte, lt, lte, in, nin, regex, starts, ends)",
+                  "sort": "Sort field",
+                  "dir": "Sort direction (asc or desc)",
+                  "start": "Start offset for pagination",
+                  "limit": "Number of rows per page"
                 },
                 "description": "Re-process an uploaded spreadsheet file with new criteria"
             },
@@ -221,7 +236,7 @@ async fn process_asset_common(
                 });
                 let mut response = result.to_json();
                 if save_rows {
-                    let db = DB::new().await;
+                    let db = get_db_instance().await;
                     let core_options_json = core_options.to_json_value();
                     let rows = result
                         .to_vec()
@@ -231,8 +246,8 @@ async fn process_asset_common(
                     let import_info = db.save_import_with_rows(&core_options_json, &rows, import_id_opt).await;
                     if let Some((dataset_id, import_id, num_rows)) = import_info {
                         response["dataset"] = json!({
-                            "id": dataset_id,
-                            "import_id": import_id,
+                            "id": json!(dataset_id),
+                            "import_id": json!(import_id),
                             "rows": num_rows
                         });
                     }

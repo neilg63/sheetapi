@@ -2,16 +2,19 @@ use bson::{doc, oid::ObjectId, Bson, Document};
 use futures::stream::StreamExt;
 use mongodb::options::Compressor;
 use mongodb::{
-    options::{AggregateOptions, ClientOptions, FindOptions},
+    options::{ClientOptions, FindOptions},
     Client, Collection,
 };
 use serde_json::Value;
-use serde_with::chrono;
+use serde_with::chrono::{self, NaiveDateTime, TimeZone};
+use spreadsheet_to_json::indexmap::IndexMap;
 use std::str::FromStr;
 use std::vec;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::OnceCell;
 
 use crate::options::DataSetMatcher;
 
@@ -19,6 +22,13 @@ const DEFAULT_MONGO_URI: &str = "mongodb://localhost:27017";
 const DEFAULT_MONGO_CONNECTION_TIMEOUT: u64 = 6000;
 const DEFAULT_MONGO_MIN_POOL_SIZE: u32 = 2;
 const DEFAULT_MONGO_MAX_POOL_SIZE: u32 = 64;
+
+
+static DB_INSTANCE: OnceCell<DB> = OnceCell::const_new();
+
+pub async fn get_db_instance() -> &'static DB {
+    DB_INSTANCE.get_or_init(DB::new).await
+}
 
 pub struct DatabaseConfig {
     pub uri: String,
@@ -101,6 +111,7 @@ impl DB {
         skip: u64,
         filter_options: Option<Document>,
         fields: Option<Vec<&str>>,
+        sort_criteria: Option<Document>,
     ) -> Vec<Document> {
         let collection = self.get_collection(collection_name).await;
         let max = if limit > 0 { limit as i64 } else { 10000000i64 };
@@ -114,6 +125,7 @@ impl DB {
         }
         let find_options = FindOptions::builder()
             .projection(projection)
+            .sort(sort_criteria)
             .skip(skip)
             .limit(max)
             .build();
@@ -148,7 +160,7 @@ impl DB {
         filter_options: Option<Document>,
     ) -> Option<Document> {
         let records = self
-            .find_records(collection_name, 1, 0, filter_options, None)
+            .find_records(collection_name, 1, 0, filter_options, None, None)
             .await;
         if records.len() > 0 {
             for row in records {
@@ -159,7 +171,7 @@ impl DB {
     }
 
 
-    pub async fn fetch_dataset(&self, dataset_id: &str, import_id_opt: Option<String>, filter_options: Option<Document>, limit: u64, skip: u64) -> Option<RowSet> {
+    pub async fn fetch_dataset(&self, dataset_id: &str, import_id_opt: Option<String>, filter_options: Option<Document>, limit: u64, skip: u64, sort_criteria: Option<Document>) -> Option<RowSet> {
         let collection: Collection<Document> = self.get_collection("datasets").await;
         if let Ok(id) = ObjectId::from_str(&dataset_id) {
 
@@ -167,6 +179,11 @@ impl DB {
             if let Ok(doc_opt) = cursor_r {
                 if let Some(dset) = doc_opt {
                     let mut criteria = doc! { "dataset_id": id };
+                    if let Some(import_id) = import_id_opt {
+                        if let Ok(imp_id) = ObjectId::from_str(&import_id) {
+                            criteria.insert("import_id", imp_id);
+                        }
+                    }
                     if let Some(filter) = filter_options {
                         for (k, v) in filter.iter() {
                             if let Some(d) = v.as_document() {
@@ -174,7 +191,7 @@ impl DB {
                             }
                         }
                     }
-                    let row_docs = self.find_records("data_rows", limit, skip, Some(criteria), None).await;
+                    let row_docs = self.find_records("data_rows", limit, skip, Some(criteria), None, sort_criteria).await;
                     let rows = row_docs.iter().filter(|r| r.contains_key("data")).map(|r| r.get("data").unwrap().as_document().unwrap().to_owned()).collect::<Vec<Document>>();
                     return Some(RowSet::new(&dset, &rows, rows.len() as u64, limit, skip));
                 }
@@ -238,6 +255,10 @@ impl DB {
             if let Ok(cursor) = cursor_r2 {
                 if let Some(id) = cursor.upserted_id {
                     return (true, true, Some(id));
+                } else {
+                    if let Some(ups_id) = doc.get("_id") {
+                        return (true, true, Some(ups_id.to_owned()));
+                    }
                 }
                 return (true, false, None);
             }
@@ -268,16 +289,34 @@ impl DB {
         &self,
         collection_name: &str,
         rows: &[Document],
+        data_pk: Option<String>,
     ) -> Option<HashMap<usize, Bson>> {
         let collection: Collection<Document> = self.get_collection(collection_name).await;
-        let cursor_r = collection.insert_many(rows).await;
-        if let Ok(cursor) = cursor_r {
-            return Some(cursor.inserted_ids);
+        if let Some(pk) = data_pk {
+            let mut results = HashMap::new();
+            let mut counter = 0;
+            for row in rows {
+                let id: Option<Bson> = update_by_inner_id(collection.clone(), &pk, row.to_owned()).await;
+                if let Some(oid) = id {
+                    results.insert(counter, oid);
+                } else {
+                    if let Ok(insert_result) = collection.insert_one(row.to_owned()).await {
+                        results.insert(counter, insert_result.inserted_id);
+                    }
+                }
+                counter += 1;
+            }
+            return Some(results);
+        } else {
+            let cursor_r = collection.insert_many(rows).await;
+            if let Ok(cursor) = cursor_r {
+                return Some(cursor.inserted_ids);
+            }
         }
         None
     }
 
-    pub async fn fetch_aggregated_with_options(
+    /* pub async fn fetch_aggregated_with_options(
         &self,
         collection_name: &str,
         pipeline: Vec<Document>,
@@ -320,7 +359,7 @@ impl DB {
     pub async fn find_by_name_and_index(&self, name: &str, index: u32) -> Option<Document> {
         let filter = doc! { "filename": name, "sheet_index": index };
         self.fetch_record("imports", Some(filter)).await
-    }
+    } */
 
     pub async fn update_import(
         &self,
@@ -357,14 +396,17 @@ impl DB {
         dataset_id: ObjectId,
         import_id: ObjectId,
         rows: &[Value],
+        data_pk: Option<String>,
     ) -> usize {
         let docs = rows
             .iter()
             .map(|row| {
-                doc! { "dataset_id": dataset_id, "import_id": import_id, "data": bson::to_document(row).unwrap() }
+                let mut row_data = bson::to_document(row).unwrap();
+                convert_datetime_strings(&mut row_data);
+                doc! { "dataset_id": dataset_id, "import_id": import_id, "data": row_data }
             })
             .collect::<Vec<Document>>();
-        if let Some(id) = self.insert_many("data_rows", &docs).await {
+        if let Some(id) = self.insert_many("data_rows", &docs, data_pk).await {
             return id.len();
         }
         0
@@ -413,7 +455,6 @@ impl DB {
             if let Some(import_element) = record.get("imports") {
                 if let Some(imports) = import_element.as_array() {
                     if let Some(last_import) = imports.last() {
-                        println!("{:?}", last_import);
                         if let Some(imp_id) = last_import.as_document().and_then(|doc| doc.get("_id")) {
                             return Some((_id.unwrap(), imp_id.as_object_id().unwrap()));
                         }
@@ -430,10 +471,16 @@ impl DB {
         rows: &[Value],
         import_id: Option<String>,
     ) -> Option<(String, String, usize)> {
+        let mut data_pk_opt: Option<String> = None;
+        if let Some(data_pk) = options.get("data_pk") {
+            if let Some(pk) = data_pk.as_str() {
+                data_pk_opt = Some(pk.to_owned());
+            }
+        }
         if let Some((id, import_id)) = self.save_import(options, import_id).await {
             let id_string = id.to_string();
             let import_id_string = import_id.to_string();
-            let count = self.save_rows(id, import_id, rows).await;
+            let count = self.save_rows(id, import_id, rows, data_pk_opt).await;
             return Some((id_string, import_id_string, count));
         }
         None
@@ -447,8 +494,8 @@ fn get_db_name() -> String {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RowSet {
-    pub dataset: Document,
-    pub rows: Vec<Document>,
+    pub dataset: Value,
+    pub rows: Value,
     pub total: u64,
     pub limit: u64,
     pub skip: u64,
@@ -457,11 +504,73 @@ pub struct RowSet {
 impl RowSet {
     pub fn new(dataset: &Document, rows: &[Document], total: u64, limit: u64, skip: u64) -> Self {
         Self {
-            dataset: dataset.to_owned(),
-            rows: rows.to_owned(),
+            dataset: bson_to_json(&Bson::Document(dataset.to_owned())),
+            rows: rows.iter().map(|r| bson_to_json(&Bson::Document(r.to_owned()))).collect::<Vec<Value>>().into(),
             total,
             limit,
             skip,
         }
     }
+}
+
+fn bson_to_json(bson: &Bson) -> Value {
+    match bson {
+        Bson::ObjectId(oid) => json!(oid.to_string()),
+        Bson::DateTime(dt) => {
+            let datetime = dt.to_chrono();
+            let formatted = datetime.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+            json!(formatted)
+        },
+        Bson::Document(doc) => {
+            let mut map = IndexMap::new();
+            for (key, value) in doc.iter() {
+                map.insert(key.clone(), bson_to_json(value));
+            }
+            json!(map)
+        },
+        Bson::Array(arr) => {
+            let vec: Vec<Value> = arr.iter().map(|b| bson_to_json(b)).collect();
+            json!(vec)
+        },
+        _ => serde_json::to_value(bson).unwrap(),
+    }
+}
+
+/* fn serialize_bson<S>(bson: &Bson, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let json_value = bson_to_json(bson);
+    json_value.serialize(serializer)
+} */
+
+fn convert_datetime_strings(doc: &mut Document) {
+    let mut updates = IndexMap::new();
+
+    for (key, value) in doc.iter() {
+        if let Bson::String(date_str) = value {
+            if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ") {
+                let datetime_utc = chrono::Utc.from_utc_datetime(&naive_datetime);
+                updates.insert(key.clone(), Bson::DateTime(datetime_utc.into()));
+            }
+        }
+    }
+
+    for (key, value) in updates {
+        doc.insert(key, value);
+    }
+}
+
+async fn update_by_inner_id(collection: Collection<Document>, inner_pk: &str, update: Document) -> Option<Bson> {
+    let mut update_doc = doc! { "$set": update.clone() };
+    let field_path = format!("data.{}", inner_pk);
+    if update.contains_key(inner_pk) {
+        let pk_val = update.get(inner_pk).unwrap();
+        let filter = doc! { field_path: pk_val };
+        let cursor_r = collection.update_one(filter, update_doc).await;
+        if let Ok(cursor) = cursor_r {
+           return cursor.upserted_id;
+        }
+    }
+    None
 }
