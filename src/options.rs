@@ -2,6 +2,7 @@
 use std::str::FromStr;
 use bson::{doc, oid::ObjectId, Document};
 use fuzzy_datetime::{is_datetime_like, iso_fuzzy_string_to_datetime};
+use serde_json::{json, Value};
 use serde_with::chrono::{self, TimeZone};
 use serde::{Deserialize, Serialize};
 use axum_typed_multipart::{FieldData, TryFromMultipart};
@@ -23,15 +24,28 @@ pub struct UploadAssetRequest {
 #[derive(Serialize, Deserialize)]
 pub struct CoreOptions {
   pub filename: Option<String>,
+  pub title: Option<String>,
+  pub description: Option<String>,
+  pub user_ref: Option<String>,
+  // process mode. Currently we're mainly using preview after the initial upload and then sync with a sheet_index
+  // to save data. In future, we'll use async to process large files in the background.
   pub mode: Option<String>,
   pub max: Option<usize>,
+  // comma separated list of key names
   pub keys: Option<String>,
-  pub lines: Option<u8>,
+  // comma separated list of column names with target data types after colons
+  // eg. id,name,height:float,width:float,
   pub cols: Option<String>,
   pub sheet_index: Option<usize>,
   pub header_index: Option<usize>,
+  // refer directly to a dataset, assumed to have the same schema
   pub dataset_id: Option<String>,
+  // update within a specific import retaining the same id
   pub import_id: Option<String>,
+  // append or replace data with the same dataset_id and/or import_id
+  pub append: Option<bool>,
+  // JSON lines reserved for future use when exporting data to large files
+  pub lines: Option<bool>,
 }
 
 fn listing_limit() -> u64 {
@@ -44,26 +58,40 @@ fn listing_limit() -> u64 {
 }
 
 impl CoreOptions {
-  pub fn to_json_value(&self) -> serde_json::Value {
+  pub fn to_json_value(&self) -> Value {
     let mode_str = self.mode.clone().unwrap_or("sync".to_string());
-    let mut value = serde_json::json!({
+    let mut value = json!({
       "filename": self.filename.clone().unwrap_or_default(),
+      "title": self.title.clone().unwrap_or_default(),
+      "description": self.description.clone().unwrap_or_default(),
+      "user_ref": self.user_ref.clone().unwrap_or_default(),
       "sheet_index": self.sheet_index.unwrap_or(0),
       "header_index": self.header_index.unwrap_or(0),
       "mode": mode_str,
-      "lines": self.lines.unwrap_or(0) > 0,
+      "append": self.append.unwrap_or(false),
+      "lines": self.lines
     });
     if let Some(keys) = self.keys.clone() {
       if keys.len() > 0 {
-        value["keys"] = serde_json::json!(keys.to_parts(","));
+        value["keys"] = json!(keys.to_parts(","));
       }
     }
     if let Some(cols) = self.cols.clone() {
       if cols.len() > 0 {
-        value["columns"] = serde_json::json!(cols.to_parts(","));
+        value["columns"] = json!(cols.to_parts(","));
       }
     }
+    if let Some(d_id) = self.dataset_id.clone() {
+      value["dataset_id"] = json!(d_id);
+    }
+    if let Some(i_id) = self.import_id.clone() {
+      value["import_id"] = json!(i_id);
+    }
     value
+  }
+
+  pub fn append_mode(&self) -> bool {
+    self.append.unwrap_or(false)
   }
 }
 
@@ -71,15 +99,19 @@ impl UploadAssetRequest {
   pub fn to_core_options(&self) -> CoreOptions {
     CoreOptions {
       filename: self.file.metadata.file_name.clone(),
+      title: None,
+      description: None,
+      user_ref: None,
       mode: self.mode.clone(),
       max: self.max,
       keys: self.keys.clone(),
-      lines: self.lines.map(|l| l as u8),
+      lines: self.lines.map(|l| l > 0),
       cols: self.cols.clone(),
       sheet_index: self.sheet_index,
       header_index: self.header_index,
       dataset_id: None,
       import_id: None,
+      append: None,
     }
   }
 }

@@ -125,7 +125,7 @@ fn tmp_file_delete_after_seconds() -> u64 {
     let mut num_deleted = 0;
     let mut num_files = 0;
     let check_filename = current_fn.is_some();
-    let cFname = current_fn.unwrap_or("").to_string();
+    let current_filename = current_fn.unwrap_or("").to_string();
     for file in files {
       if let Ok(file) = file {
           let file_path = file.path();
@@ -133,7 +133,7 @@ fn tmp_file_delete_after_seconds() -> u64 {
             if fm.is_file() {
               if let Ok(modified) = fm.modified() {
                 let fname = file.file_name().to_string_lossy().to_string();
-                let is_current = check_filename && fname == cFname;
+                let is_current = check_filename && fname == current_filename;
                 if !is_current {
                   let now = SystemTime::now();
                   let elapsed = now.duration_since(modified).unwrap();

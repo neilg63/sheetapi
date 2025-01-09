@@ -79,7 +79,7 @@ pub async fn get_dataset(PathParam(id): PathParam<String>, Query(params): Query<
     let (start, limit) = params.to_pagination();
     let sort_criteria = params.to_sort_criteria();
     let data = db.fetch_dataset(&id, None, criteria, limit, start, sort_criteria).await;
-    let response = json!( data);
+    let response = json!(data);
     (StatusCode::OK, Json(response))
 }
 
@@ -196,11 +196,8 @@ async fn process_asset_common(
         } else {
             default_row_count
         };
-        let line_mode = if let Some(line_val) = core_options.lines {
-            line_val > 0
-        } else {
-            false
-        };
+        // future use
+        // let line_mode = core_options.lines.unwrap_or(false);
         if let Some(cols_str) = core_options.cols.clone() {
             col_values = serde_json::from_str(&cols_str).unwrap_or_else(|_| vec![]);
         }

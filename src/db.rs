@@ -113,6 +113,20 @@ impl DB {
         fields: Option<Vec<&str>>,
         sort_criteria: Option<Document>,
     ) -> Vec<Document> {
+        let (_total, rows) = self.find_records_with_total(collection_name, limit, skip, filter_options, fields, sort_criteria, false).await;
+        rows
+    }
+
+    pub async fn find_records_with_total(
+        &self,
+        collection_name: &str,
+        limit: u64,
+        skip: u64,
+        filter_options: Option<Document>,
+        fields: Option<Vec<&str>>,
+        sort_criteria: Option<Document>,
+        add_total: bool
+    ) -> (Option<u64>, Vec<Document>) {
         let collection = self.get_collection(collection_name).await;
         let max = if limit > 0 { limit as i64 } else { 10000000i64 };
         let mut projection: Option<Document> = None;
@@ -129,7 +143,7 @@ impl DB {
             .skip(skip)
             .limit(max)
             .build();
-        let filter_opts = if let Some(fo) = filter_options {
+        let filter_opts = if let Some(fo) = filter_options.clone() {
             fo
         } else {
             doc! {}
@@ -138,9 +152,11 @@ impl DB {
             .find(filter_opts)
             .with_options(find_options)
             .await;
+        let mut rows: Vec<Document> = Vec::new();
+        let mut total: Option<u64> = None;
         if let Ok(cursor) = cursor_r {
             let results: Vec<mongodb::error::Result<Document>> = cursor.collect::<Vec<_>>().await;
-            let mut rows: Vec<Document> = Vec::new();
+            
             if results.len() > 0 {
                 for item in results {
                     if let Ok(row) = item {
@@ -148,9 +164,11 @@ impl DB {
                     }
                 }
             }
-            return rows;
         }
-        vec![]
+        if add_total {
+            total = count_docs(collection, filter_options).await;
+        }
+        (total, rows)
     }
 
 
@@ -190,10 +208,10 @@ impl DB {
                                 criteria.insert(k, d );  
                             }
                         }
-                    }
-                    let row_docs = self.find_records("data_rows", limit, skip, Some(criteria), None, sort_criteria).await;
+                    }                    
+                    let (total,row_docs) = self.find_records_with_total("data_rows", limit, skip, Some(criteria), None, sort_criteria, true).await;
                     let rows = row_docs.iter().filter(|r| r.contains_key("data")).map(|r| r.get("data").unwrap().as_document().unwrap().to_owned()).collect::<Vec<Document>>();
-                    return Some(RowSet::new(&dset, &rows, rows.len() as u64, limit, skip));
+                    return Some(RowSet::new(&dset, &rows, total.unwrap_or(rows.len() as u64), limit, skip));
                 }
             }
         }
@@ -562,7 +580,7 @@ fn convert_datetime_strings(doc: &mut Document) {
 }
 
 async fn update_by_inner_id(collection: Collection<Document>, inner_pk: &str, update: Document) -> Option<Bson> {
-    let mut update_doc = doc! { "$set": update.clone() };
+    let update_doc = doc! { "$set": update.clone() };
     let field_path = format!("data.{}", inner_pk);
     if update.contains_key(inner_pk) {
         let pk_val = update.get(inner_pk).unwrap();
@@ -571,6 +589,19 @@ async fn update_by_inner_id(collection: Collection<Document>, inner_pk: &str, up
         if let Ok(cursor) = cursor_r {
            return cursor.upserted_id;
         }
+    }
+    None
+}
+
+async fn count_docs(collection: Collection<Document>, filter_options: Option<Document>) -> Option<u64> {
+    let filter_opts = if let Some(filter) = filter_options {
+        filter
+    } else {
+        doc! {}
+    };
+    let cursor_r = collection.count_documents(filter_opts).await;
+    if let Ok(cursor) = cursor_r {
+        return Some(cursor);
     }
     None
 }
