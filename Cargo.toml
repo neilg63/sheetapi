@@ -9,15 +9,16 @@ axum_typed_multipart = "0.14.0"
 bson = { version = "2.13.0", features = ["chrono-0_4"] }
 dotenv = "0.15.0"
 futures = "0.3.31"
+fuzzy-datetime = "0.1.1"
 lazy_static = "1.5.0"
 mongodb = { version = "3.1.1", features = ["zstd-compression", "snappy-compression", "zlib-compression"] }
-redis = "0.27.6"
+redis = "0.28.0"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = { version = "1.0.134", features = ["indexmap", "preserve_order"] }
 serde_with = { version = "3.12.0", features = ["json", "indexmap", "chrono"] }
 spreadsheet-to-json = "0.1.14"
 tempfile = "3.15.0"
-tokio = { version = "1.42.0", features = ["full"] }
+tokio = { version = "1.43.0", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["cors"] }
 
 

@@ -1,9 +1,11 @@
 
 use std::str::FromStr;
 use bson::{doc, oid::ObjectId, Document};
+use fuzzy_datetime::{is_datetime_like, iso_fuzzy_string_to_datetime};
+use serde_with::chrono::{self, TimeZone};
 use serde::{Deserialize, Serialize};
 use axum_typed_multipart::{FieldData, TryFromMultipart};
-use spreadsheet_to_json::{heck::ToSnakeCase, simple_string_patterns::{IsNumeric, StripCharacters, ToSegments}};
+use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{IsNumeric, StripCharacters, ToSegments}};
 use tempfile::NamedTempFile;
 
 #[derive(TryFromMultipart, Debug)]
@@ -121,6 +123,7 @@ pub struct QueryFilterParams {
     pub f: Option<String>,
     pub v: Option<String>,
     pub o: Option<String>,
+    pub dt: Option<String>,
     pub sort: Option<String>,
     pub dir: Option<String>,
     pub import: Option<String>,
@@ -133,13 +136,15 @@ impl QueryFilterParams {
         let mut criteria = doc! {};
         if let Some(field) = self.f.clone() {
             if let Some(value) = self.v.clone() {
+              let dt_key = self.dt.clone().unwrap_or("string".to_string());
+              let data_type = CastDataType::from_str(dt_key.as_str());
                 let operator = self.o.clone().unwrap_or("eq".to_string()).to_lowercase().strip_non_alphanum();
-                let value = match operator.as_str() {
-                    "ne" => doc! { "$ne": value },
-                    "gt" => doc! { "$gt": value },
-                    "gte" => doc! { "$gte": value },
-                    "lt" => doc! { "$lt": value },
-                    "lte" => doc! { "$lte": value },
+                let cv = match operator.as_str() {
+                    "ne" => cast_to_comparison("$ne", &value, &data_type),
+                    "gt" => cast_to_comparison("$gt", &value, &data_type),
+                    "gte" => cast_to_comparison("$gte", &value, &data_type),
+                    "lt" => cast_to_comparison("$lt", &value, &data_type),
+                    "lte" => cast_to_comparison("$lte", &value, &data_type),
                     "in" => doc! { "$in": value.to_parts(",") },
                     "nin" => doc! { "$nin": value.to_parts(",") },
                     "r" | "regex" | "regexp" | "rgx" => doc! { "$regex": value, "$options": "i" },
@@ -147,9 +152,9 @@ impl QueryFilterParams {
                     "like" | "l" => doc! { "$regex": format!("^\\s*{}\\s*$",value.trim()), "$options": "i" },
                     "starts" | "startswith" => doc! { "$regex": format!("^{}",value.trim()), "$options": "i" },
                     "ends" | "endswith" => doc! { "$regex": format!("{}$",value.trim()), "$options": "i" },
-                    _ => doc! { "$eq": value },
+                    _ => cast_to_comparison("$eq", &value, &data_type),
                 };
-                criteria = doc! { format!("data.{}", field): value };
+                criteria = doc! { format!("data.{}", field): cv };
             }
         }
         if criteria.is_empty() {
@@ -200,3 +205,88 @@ impl QueryFilterParams {
     }
     
 }
+
+#[derive(Debug, Clone)]
+pub enum CastDataType {
+  String,
+  Float,
+  Integer,
+  Date,
+  DateTime,
+  Boolean,
+}
+
+impl CastDataType {
+  pub fn from_str(key: &str) -> Self {
+    match key.to_lowercase().as_str() {
+      "float" | "number" =>  CastDataType::Float,
+      "int" | "integer" =>  CastDataType::Integer,
+      "date" => CastDataType::Date,
+      "datetime" => CastDataType::DateTime,
+      "bool" | "boolean" => CastDataType::Boolean,
+      _ => CastDataType::String,
+    }
+  }
+
+  pub fn is_numeric(&self) -> bool {
+    match self {
+      CastDataType::Float | CastDataType::Integer => true,
+      _ => false,
+    }
+  }
+
+  pub fn is_bool(&self) -> bool {
+    match self {
+      CastDataType::Boolean => true,
+      _ => false,
+    }
+  }
+
+  pub fn is_datelike(&self) -> bool {
+    match self {
+      CastDataType::Date | CastDataType::DateTime => true,
+      _ => false,
+    }
+  }
+
+  pub fn is_datetime(&self) -> bool {
+    match self {
+      CastDataType::DateTime => true,
+      _ => false,
+    }
+  }
+
+  pub fn is_integer(&self) -> bool {
+    match self {
+      CastDataType::Integer => true,
+      _ => false,
+    }
+  }
+}
+
+fn cast_to_comparison(op: &str, value: &str, dt: &CastDataType) -> Document {
+  if value.is_numeric() || dt.is_numeric() {
+    if dt.is_integer() {
+      if let Ok(num_val) = value.parse::<i64>() {
+        return doc! { op.to_string(): num_val }
+      }
+    } else {
+      if let Ok(num_val) = value.parse::<f64>() {
+        return doc! { op.to_string(): num_val }
+      }
+    }
+  } else if is_datetime_like(value) {
+    if let Ok(date_val) = iso_fuzzy_string_to_datetime(value) {
+      let dt = chrono::Utc.from_utc_datetime(&date_val);
+      return doc! { op.to_string(): dt }
+    }
+  } else {
+    if let Some(is_true) = is_truthy_core(value, false) {
+      return doc! { op.to_string(): is_true }
+    } else {
+      return doc! { op.to_string(): value.to_string() }
+    }
+  }
+  return doc! { op.to_string(): value.to_string() }
+}
+
