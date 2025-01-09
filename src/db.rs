@@ -451,12 +451,12 @@ impl DB {
         options: &Value,
         import_id: Option<String>,
     ) -> Option<(ObjectId, ObjectId)> {
-        let mut doc = doc! {};
+        let mut options_doc = doc! {};
         for (key, value) in options.as_object().unwrap() {
             match key.as_str() {
                 "dataset_id" |  "import_id" | "filename" | "title" | "description" | "user_ref" => continue,
                 _ => {
-                    doc.insert(key, bson::to_bson(value).unwrap());
+                    options_doc.insert(key, bson::to_bson(value).unwrap());
                 }
             }
         }
@@ -472,29 +472,30 @@ impl DB {
             DataSetMatcher::from_name_index(&fname, s_index)
         };
         let import_id_opt = import_id.map(|id| ObjectId::from_str(&id).unwrap());
-        if let Some((id, import_id)) = self
-            .update_import(&matcher.to_criteria(), &mut doc, import_id_opt)
-            .await
-        {
-            return Some((id, import_id));
-        }
+
         let import = doc! {
             "_id": ObjectId::new(),
             "dt": chrono::Utc::now(),
             "filename": &fname,
             "sheet_index": s_index
         };
-        let save_dac = doc! {
+        let mut record_doc = doc! {
             "user_ref": &user_ref,
             "name": &fname,
             "title": &title,
             "description": &description,
             "sheet_index": s_index,
-            "options": doc,
+            "options": options_doc,
             "imports": [import],
             "created_at": chrono::Utc::now()
         };
-        if let Some(record) = self.insert_record("datasets", &save_dac).await {
+        if let Some((id, import_id)) = self
+            .update_import(&matcher.to_criteria(), &mut record_doc, import_id_opt)
+            .await
+        {
+            return Some((id, import_id));
+        }
+        if let Some(record) = self.insert_record("datasets", &record_doc).await {
             let _id = if let Some(id_opt) = record.get("_id") {
                 id_opt.as_object_id()
             } else {
