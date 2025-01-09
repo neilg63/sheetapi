@@ -172,6 +172,7 @@ async fn process_asset_common(
         let mode_key = core_options.mode.clone().unwrap_or("sync".to_string());
         let read_mode = ReadMode::from_key(&mode_key);
         let is_preview = read_mode.is_multimode();
+        let append = core_options.append.unwrap_or(false);
         let max_row_count = if is_preview {
             max_preview_limit
         } else {
@@ -240,7 +241,7 @@ async fn process_asset_common(
                         .into_iter()
                         .map(|r| json!(r))
                         .collect::<Vec<Value>>();
-                    let import_info = db.save_import_with_rows(&core_options_json, &rows, import_id_opt).await;
+                    let import_info = db.save_import_with_rows(&core_options_json, &rows, import_id_opt, append).await;
                     if let Some((dataset_id, import_id, num_rows)) = import_info {
                         response["dataset"] = json!({
                             "id": json!(dataset_id),

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::OnceCell;
 
-use crate::options::DataSetMatcher;
+use crate::options::{DataSetMatcher, ReplaceMode};
 
 const DEFAULT_MONGO_URI: &str = "mongodb://localhost:27017";
 const DEFAULT_MONGO_CONNECTION_TIMEOUT: u64 = 6000;
@@ -308,8 +308,18 @@ impl DB {
         collection_name: &str,
         rows: &[Document],
         data_pk: Option<String>,
+        delete_key_ref: Option<(&str, ObjectId)>,
     ) -> Option<HashMap<usize, Bson>> {
         let collection: Collection<Document> = self.get_collection(collection_name).await;
+        // check each row for the data_pk field and update or insert as required
+        if let Some((fk, fk_id)) = delete_key_ref {
+            let del_result = delete_by_id(collection.clone(), fk, fk_id).await;
+            if let Some(deleted) = del_result {
+                if deleted > 0 {
+                    println!("Deleted {} rows.", deleted);
+                }
+            }
+        }
         if let Some(pk) = data_pk {
             let mut results = HashMap::new();
             let mut counter = 0;
@@ -415,6 +425,7 @@ impl DB {
         import_id: ObjectId,
         rows: &[Value],
         data_pk: Option<String>,
+        replace_mode: ReplaceMode
     ) -> usize {
         let docs = rows
             .iter()
@@ -424,7 +435,12 @@ impl DB {
                 doc! { "dataset_id": dataset_id, "import_id": import_id, "data": row_data }
             })
             .collect::<Vec<Document>>();
-        if let Some(id) = self.insert_many("data_rows", &docs, data_pk).await {
+        let delete_key_refs = match replace_mode {
+            ReplaceMode::ReplaceAll => Some(("dataset_id", dataset_id)),
+            ReplaceMode::ReplaceImport => Some(("import_id", import_id)),
+            _ => None,
+        };
+        if let Some(id) = self.insert_many("data_rows", &docs, data_pk, delete_key_refs).await {
             return id.len();
         }
         0
@@ -435,9 +451,20 @@ impl DB {
         options: &Value,
         import_id: Option<String>,
     ) -> Option<(ObjectId, ObjectId)> {
-        let mut doc = bson::to_document(options).unwrap();
+        let mut doc = doc! {};
+        for (key, value) in options.as_object().unwrap() {
+            match key.as_str() {
+                "dataset_id" |  "import_id" | "filename" | "title" | "description" | "user_ref" => continue,
+                _ => {
+                    doc.insert(key, bson::to_bson(value).unwrap());
+                }
+            }
+        }
         let dataset_id_opt = options["dataset_id"].as_str();
         let fname = options["filename"].as_str().unwrap_or_default().to_owned();
+        let user_ref = options["user_ref"].as_str().unwrap_or_default().to_owned();
+        let title = options["title"].as_str().unwrap_or_default().to_owned();
+        let description = options["description"].as_str().unwrap_or_default().to_owned();
         let s_index = options["sheet_index"].as_u64().unwrap_or(0) as u32;
         let matcher = if let Some(dataset_id) = dataset_id_opt {
             DataSetMatcher::from_id(dataset_id)
@@ -458,9 +485,12 @@ impl DB {
             "sheet_index": s_index
         };
         let save_dac = doc! {
+            "user_ref": &user_ref,
             "name": &fname,
+            "title": &title,
+            "description": &description,
             "sheet_index": s_index,
-            "options": doc.clone(),
+            "options": doc,
             "imports": [import],
             "created_at": chrono::Utc::now()
         };
@@ -487,7 +517,8 @@ impl DB {
         &self,
         options: &Value,
         rows: &[Value],
-        import_id: Option<String>,
+        import_id_opt: Option<String>,
+        append: bool,
     ) -> Option<(String, String, usize)> {
         let mut data_pk_opt: Option<String> = None;
         if let Some(data_pk) = options.get("data_pk") {
@@ -495,10 +526,12 @@ impl DB {
                 data_pk_opt = Some(pk.to_owned());
             }
         }
-        if let Some((id, import_id)) = self.save_import(options, import_id).await {
+        let has_import_id = import_id_opt.is_some();
+        if let Some((id, import_id)) = self.save_import(options, import_id_opt).await {
             let id_string = id.to_string();
             let import_id_string = import_id.to_string();
-            let count = self.save_rows(id, import_id, rows, data_pk_opt).await;
+            let replace_mode = ReplaceMode::new(append, has_import_id);
+            let count = self.save_rows(id, import_id, rows, data_pk_opt, replace_mode).await;
             return Some((id_string, import_id_string, count));
         }
         None
@@ -604,4 +637,18 @@ async fn count_docs(collection: Collection<Document>, filter_options: Option<Doc
         return Some(cursor);
     }
     None
+}
+
+async fn delete_many(collection: Collection<Document>, filter_options: Option<Document>) -> Option<u64> {
+    if let Some(filter_opts) = filter_options {
+        let cursor_r = collection.delete_many(filter_opts).await;
+        if let Ok(cursor) = cursor_r {
+            return Some(cursor.deleted_count);
+        }
+    } 
+    None
+}
+
+async fn delete_by_id(collection: Collection<Document>, field_name: &str, id: ObjectId) -> Option<u64> {
+    delete_many(collection, Some(doc!{ field_name: id })).await
 }

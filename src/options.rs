@@ -296,6 +296,25 @@ impl CastDataType {
   }
 }
 
+#[derive(Debug, Clone)]
+pub enum ReplaceMode {
+  ReplaceAll,
+  ReplaceImport,
+  Append,
+}
+
+impl ReplaceMode {
+  pub fn new(append: bool, has_import_id: bool) -> Self {
+    if append {
+      ReplaceMode::Append
+    } else if has_import_id {
+      ReplaceMode::ReplaceImport
+    } else {
+      ReplaceMode::ReplaceAll
+    }
+  }
+}
+
 fn cast_to_comparison(op: &str, value: &str, dt: &CastDataType) -> Document {
   if value.is_numeric() || dt.is_numeric() {
     if dt.is_integer() {
