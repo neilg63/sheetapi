@@ -13,6 +13,7 @@ mod routes;
 
 use routes::*;
 
+
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(vec![
@@ -28,9 +29,12 @@ async fn main() -> Result<(), std::io::Error> {
         .route("/process", put(process_asset))
         .route("/check-file/:file_name", get(check_file))
         .route("/dataset/:id", get(get_dataset))
+        .route("/datasets/:id", get(get_dataset))
+        .route("/datasets", get(list_datasets))
         // The default axum body size limit is 2MiB, so we increase it to 1GiB.
         .layer(DefaultBodyLimit::max(1024 * 1024 * 1024))
         .layer(cors)
+        .fallback(not_found)
         .into_make_service();
     let ip = dotenv::var("LOCAL_ADDRESS").unwrap_or(String::from("0.0.0.0"));
     let port = dotenv::var("PORT").unwrap_or(String::from("3000"));

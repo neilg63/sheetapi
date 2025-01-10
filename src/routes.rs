@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use tokio::time::error;
 use crate::{db::get_db_instance, files::*, options::*};
 use axum_typed_multipart::TypedMultipart;
 use serde_json::{json, Value};
@@ -78,8 +79,30 @@ pub async fn get_dataset(PathParam(id): PathParam<String>, Query(params): Query<
     let criteria = params.to_criteria();
     let (start, limit) = params.to_pagination();
     let sort_criteria = params.to_sort_criteria();
-    let data = db.fetch_dataset(&id, None, criteria, limit, start, sort_criteria).await;
-    let response = json!(data);
+    let data_opt = db.fetch_dataset(&id, None, criteria, limit, start, sort_criteria).await;
+    if let Some(data) = data_opt {
+        (StatusCode::OK, Json(json!(data)))
+    } else {
+        let error_result = json!({
+            "error": "Not Found",
+            "message": "The requested dataset was not found."
+        });
+        (StatusCode::NOT_FOUND, Json(error_result))
+    }
+}
+
+pub async fn list_datasets(Query(params): Query<QueryFilterParams>) -> impl IntoResponse {
+    let db = get_db_instance().await;
+    let criteria = params.to_search_criteria();
+    let sort_criteria = params.to_list_sort_criteria();
+    let (start, limit) = params.to_pagination();
+    let (total, rows) = db.get_datasets(criteria, limit, start, sort_criteria).await;
+    let response = json!({
+        "total": total.unwrap_or(0),
+        "start": start,
+        "limit": limit,
+        "rows": rows
+    });
     (StatusCode::OK, Json(response))
 }
 
@@ -135,14 +158,36 @@ pub async fn welcome() -> impl IntoResponse {
                 },
                 "description": "Re-process an uploaded spreadsheet file with new criteria"
             },
+            "datasets": {
+                "method": "GET",
+                "path": "/datasets",
+                "query_params": {
+                  "q": "Search query within file name, titles, or descriptions",
+                  "u": "user reference or ID",
+                  "sort": "Sort field (created or updated), default by newest first",
+                  "dir": "Sort direction (asc or desc), default desc for created",
+                  "start": "Start offset for pagination",
+                  "limit": "Number of rows per page"
+                },
+                "description": "List imported datasets by user"
+            },
             "check-file": {
                 "method": "GET",
                 "path": "/check-file/:file_name",
-                "description": "Check if a file exists in the temporary directory"
+                "description": "Check if a file exists in the temporary directory after initial upload"
             }
         }
     });
     (StatusCode::OK, Json(response))
+}
+
+
+pub async fn not_found() -> impl IntoResponse {
+    let response = json!({
+        "error": "Not Found",
+        "message": "The requested resource was not found."
+    });
+    (StatusCode::NOT_FOUND, Json(response))
 }
 
 async fn process_asset_common(

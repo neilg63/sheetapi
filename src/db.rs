@@ -1,6 +1,6 @@
 use bson::{doc, oid::ObjectId, Bson, Document};
 use futures::stream::StreamExt;
-use mongodb::options::Compressor;
+use mongodb::options::{AggregateOptions, Compressor};
 use mongodb::{
     options::{ClientOptions, FindOptions},
     Client, Collection,
@@ -344,7 +344,7 @@ impl DB {
         None
     }
 
-    /* pub async fn fetch_aggregated_with_options(
+    pub async fn fetch_aggregated_with_options(
         &self,
         collection_name: &str,
         pipeline: Vec<Document>,
@@ -387,7 +387,7 @@ impl DB {
     pub async fn find_by_name_and_index(&self, name: &str, index: u32) -> Option<Document> {
         let filter = doc! { "filename": name, "sheet_index": index };
         self.fetch_record("imports", Some(filter)).await
-    } */
+    }
 
     pub async fn update_import(
         &self,
@@ -537,6 +537,47 @@ impl DB {
         }
         None
     }
+
+    pub async fn row_counts(&self, dataset_ids: &[ObjectId]) -> Vec<Document> {
+        self.fetch_aggregated("data_rows", vec![
+            doc! { "$match": { "dataset_id": { "$in": dataset_ids } } },
+            doc! {
+                "$group": {
+                    "_id": "$dataset_id", 
+                    "count": { "$sum": 1 } 
+                }
+            }
+        ]).await
+    }
+
+    pub async fn get_datasets(&self, filter_options: Option<Document>, limit: u64, skip: u64, sort_criteria: Option<Document>) -> (Option<u64>, Vec<Value>) {
+        let (total, mut dsets) = self.find_records_with_total("datasets", limit, skip, filter_options, None, sort_criteria, true).await;
+        let dataset_ids = dsets.iter().map(|d| d.get("_id").unwrap().as_object_id().unwrap().to_owned()).collect::<Vec<ObjectId>>();
+        let counts = self.row_counts(&dataset_ids).await;
+        let mut datasets: Vec<Value> = vec![];
+        for dset in dsets {
+            let mut row = bson_to_json(&Bson::Document(dset.to_owned()));
+            if let Some(ref_id) = extra_id_from_doc(&dset) {
+                let item_opt = counts.iter().find(|c| {
+                    if let Some(id_val) = c.get("_id") {
+                        if let Some(id) = id_val.as_object_id() {
+                            return id == ref_id;
+                        }
+                    }
+                    false
+                });
+                if let Some(item) = item_opt {
+                    if let Some(count) = item.get("count") {
+                        row["row_count"] = json!(count.as_i32());
+                    }
+                    
+                }
+            }
+            datasets.push(row.to_owned());
+        }
+        (total, datasets)
+    }
+
 }
 
 fn get_db_name() -> String {
@@ -652,4 +693,14 @@ async fn delete_many(collection: Collection<Document>, filter_options: Option<Do
 
 async fn delete_by_id(collection: Collection<Document>, field_name: &str, id: ObjectId) -> Option<u64> {
     delete_many(collection, Some(doc!{ field_name: id })).await
+}
+
+
+fn extra_id_from_doc(doc: &Document) -> Option<ObjectId> {
+    if let Some(id) = doc.get("_id") {
+        if let Some(oid) = id.as_object_id() {
+            return Some(oid.to_owned());
+        }
+    }
+    None
 }

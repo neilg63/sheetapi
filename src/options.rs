@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use serde_with::chrono::{self, TimeZone};
 use serde::{Deserialize, Serialize};
 use axum_typed_multipart::{FieldData, TryFromMultipart};
-use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{IsNumeric, StripCharacters, ToSegments}};
+use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{IsNumeric, SimpleMatch, StripCharacters, ToSegments}};
 use tempfile::NamedTempFile;
 
 #[derive(TryFromMultipart, Debug)]
@@ -161,6 +161,8 @@ pub struct QueryFilterParams {
     pub import: Option<String>,
     pub start: Option<u64>,
     pub limit: Option<u64>,
+    pub q: Option<String>,
+    pub u: Option<String>, // user reference
 }
 
 impl QueryFilterParams {
@@ -196,34 +198,47 @@ impl QueryFilterParams {
         }
     }
 
+    pub fn to_search_criteria(&self) -> Option<Document> {
+      let mut criteria = doc! {};
+      if let Some(q) = self.q.clone() {
+        let s_str = format!("\\b\\s*{}", q.trim());
+          criteria = doc! { "$or": [
+              { "name": { "$regex": &s_str, "$options": "i" } },
+              { "imports.filename": { "$regex": &s_str, "$options": "i" } },
+              { "title": { "$regex": &s_str, "$options": "i" } },
+              { "description": { "$regex": &s_str, "$options": "i" } },
+          ] };
+      }
+      if let Some(u) = self.u.clone() {
+        let u_str = format!("^{}\\b", u.trim());
+          criteria = doc! { "user_ref": { "$regex": &u_str, "$options": "i" } };
+      }
+      if criteria.is_empty() {
+          None
+      } else {
+          Some(criteria)
+      }
+  }
+
     pub fn to_sort_criteria(&self) -> Option<Document> {
         if let Some(sort) = self.sort.clone() {
-            let dir_key = self.dir.clone().unwrap_or("asc".to_string()).trim().to_lowercase();
-            let dir = match dir_key.as_str() {
-                "asc" => 1,
-                "desc" => -1,
-                _ => {
-                    if dir_key.is_numeric() {
-                      if let Ok(num_val) = dir_key.parse::<i32>() {
-                          if num_val < 0 {
-                            -1
-                          } else {
-                            1
-                          }
-                      } else {
-                        1
-                      }
-                  } else if dir_key.starts_with("desc") || dir_key.starts_with("down") || dir_key.starts_with("dsc") {
-                    -1
-                  } else {
-                    1
-                  }
-                }
-            };
-            Some(doc! { format!("data.{}", sort): dir })
+          let dir_key = self.dir.clone().unwrap_or("asc".to_string());
+          let dir = match_sort_direction(&dir_key);
+          Some(doc! { format!("data.{}", sort): dir })
         } else {
-            None
+          None
         }
+    }
+
+    pub fn to_list_sort_criteria(&self) -> Option<Document> {
+      let sort = self.sort.clone().unwrap_or("created_at".to_string()); 
+      let mut sort_field = "created_at";
+      if sort.starts_with_ci("updat") || sort.starts_with_ci("modif") || sort.starts_with_ci("old") {
+        sort_field = "updated_at";
+      }
+      let dir_key = self.dir.clone().unwrap_or("desc".to_string());
+      let dir = match_sort_direction(&dir_key);
+      Some(doc! { sort_field.to_string(): dir })
     }
 
     pub fn to_pagination(&self) -> (u64, u64) {
@@ -339,5 +354,30 @@ fn cast_to_comparison(op: &str, value: &str, dt: &CastDataType) -> Document {
     }
   }
   return doc! { op.to_string(): value.to_string() }
+}
+
+fn match_sort_direction(key: &str) -> i32 {
+  let dir_key = key.trim().to_lowercase();
+  match dir_key.as_str() {
+      "asc" => 1,
+      "desc" => -1,
+      _ => {
+          if dir_key.is_numeric() {
+            if let Ok(num_val) = dir_key.parse::<i32>() {
+                if num_val < 0 {
+                  -1
+                } else {
+                  1
+                }
+            } else {
+              1
+            }
+        } else if dir_key.starts_with("desc") || dir_key.starts_with("down") || dir_key.starts_with("dsc") {
+          -1
+        } else {
+          1
+        }
+      }
+  }
 }
 
