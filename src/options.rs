@@ -183,7 +183,7 @@ impl QueryFilterParams {
                     "nin" => doc! { "$nin": value.to_parts(",") },
                     "r" | "regex" | "regexp" | "rgx" => doc! { "$regex": value, "$options": "i" },
                     "rcs" | "rc" | "regexc" | "regexpc" | "rgxc" => doc! { "$regex": value },
-                    "like" | "l" => doc! { "$regex": format!("^\\s*{}\\s*$",value.trim()), "$options": "i" },
+                    "like" | "l" => doc! { "$regex": str_to_like_pattern(&value), "$options": "i" },
                     "starts" | "startswith" => doc! { "$regex": format!("^{}",value.trim()), "$options": "i" },
                     "ends" | "endswith" => doc! { "$regex": format!("{}$",value.trim()), "$options": "i" },
                     _ => cast_to_comparison("$eq", &value, &data_type),
@@ -379,5 +379,9 @@ fn match_sort_direction(key: &str) -> i32 {
         }
       }
   }
+}
+
+fn str_to_like_pattern(value: &str) -> String {
+  format!("^\\s*{}\\s*$", value.replace('.', ".\\.").replace('?', ".\\?").replace('%', ".*?").trim())
 }
 
