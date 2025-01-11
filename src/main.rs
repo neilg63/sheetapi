@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post, put},
 Router,
 };
+use options::get_max_body_size;
 use tower_http::cors::{Any, CorsLayer};
 
 mod db;
@@ -22,7 +23,7 @@ async fn main() -> Result<(), std::io::Error> {
         Method::PUT,
         Method::DELETE,
     ]);
-
+    let max_body_size = get_max_body_size();
     let app = Router::new()
         .route("/", get(welcome))
         .route("/upload", post(upload_asset))
@@ -32,7 +33,7 @@ async fn main() -> Result<(), std::io::Error> {
         .route("/datasets/:id", get(get_dataset))
         .route("/datasets", get(list_datasets))
         // The default axum body size limit is 2MiB, so we increase it to 1GiB.
-        .layer(DefaultBodyLimit::max(1024 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(max_body_size))
         .layer(cors)
         .fallback(not_found)
         .into_make_service();

@@ -1,11 +1,9 @@
 use axum::{
-    extract::{Json, Path as PathParam, Query},
+    extract::{Json, Multipart, Path as PathParam, Query},
     http::StatusCode,
     response::IntoResponse,
 };
-use tokio::time::error;
 use crate::{db::get_db_instance, files::*, options::*};
-use axum_typed_multipart::TypedMultipart;
 use serde_json::{json, Value};
 use spreadsheet_to_json::{
     process_spreadsheet_immediate, simple_string_patterns::ToSegments, OptionSet, ReadMode,
@@ -13,29 +11,28 @@ use spreadsheet_to_json::{
 use std::path::{Path, PathBuf};
 
 #[axum::debug_handler]
-pub async fn upload_asset(
-    TypedMultipart(request): TypedMultipart<UploadAssetRequest>,
-) -> impl IntoResponse {
+pub async fn upload_asset(multipart: Multipart) -> impl IntoResponse {
+    let request = UploadAssetRequest::from_multipart(multipart).await;
     let (tmp_directory, sub_directory) = get_tmp_and_sub_directories();
     let file_name = build_filename(&request.file);
     let file_path = Path::new(tmp_directory.as_str())
         .join(sub_directory.as_str())
         .join(&file_name);
-    // Save the file to the temporary directory
+
+    let core_options = &request.to_core_options();
+     // Save the file to the temporary directory
     if let Ok(_fn) = ensure_directory_and_construct_path(&tmp_directory, &sub_directory, &file_name)
     {
         save_file(&request.file, &file_path).ok();
     } else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json_error_response("Failed to create directory"),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, json_error_response("Failed to access or create directory.")).into_response();
     }
-    let core_options = &request.to_core_options();
+    if core_options.filename.is_none() {
+        return (StatusCode::BAD_REQUEST, json_error_response("No filename provided")).into_response();
+    } 
     match process_asset_common(file_path, &core_options, false).await {
         Ok(response) => response.into_response(),
-        Err((status, message)) => (status, json_error_response(&message)).into_response(),
+        Err((status, message)) => (status, message).into_response(),
     }
 }
 
@@ -52,7 +49,7 @@ pub async fn process_asset(Json(core_options): Json<CoreOptions>) -> impl IntoRe
 
     match process_asset_common(file_path, &core_options, true).await {
         Ok(response) => response.into_response(),
-        Err((status, message)) => (status, json_error_response(&message)).into_response(),
+        Err((status, message)) => (status, message).into_response(),
     }
 }
 
@@ -83,11 +80,7 @@ pub async fn get_dataset(PathParam(id): PathParam<String>, Query(params): Query<
     if let Some(data) = data_opt {
         (StatusCode::OK, Json(json!(data)))
     } else {
-        let error_result = json!({
-            "error": "Not Found",
-            "message": "The requested dataset was not found."
-        });
-        (StatusCode::NOT_FOUND, Json(error_result))
+        (StatusCode::NOT_FOUND, json_error_response("The requested dataset was not found."))
     }
 }
 
@@ -108,7 +101,9 @@ pub async fn list_datasets(Query(params): Query<QueryFilterParams>) -> impl Into
 
 pub async fn welcome() -> impl IntoResponse {
     let response = json!({
-        "message": "Welcome to the Spreadsheet to JSON API",
+        "title": "Spreadsheet to JSON API",
+        "description": "Upload spreadsheets (Excel: xlsx, xlsb, xls, LibreOffice: odt, CSV and TSV), convert them to JSON and create a Web endpoint",
+        "version": "0.1.0",
         "routes": {
             "upload": {
                 "method": "POST",
@@ -183,18 +178,14 @@ pub async fn welcome() -> impl IntoResponse {
 
 
 pub async fn not_found() -> impl IntoResponse {
-    let response = json!({
-        "error": "Not Found",
-        "message": "The requested resource was not found."
-    });
-    (StatusCode::NOT_FOUND, Json(response))
+    (StatusCode::NOT_FOUND, json_error_response("The requested resource was not found."))
 }
 
 async fn process_asset_common(
     file_path: PathBuf,
     core_options: &CoreOptions,
     save_rows: bool,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let default_limit: usize = dotenv::var("DEFAULT_LIMIT")
         .unwrap_or(String::from("1000"))
         .parse()
@@ -266,9 +257,6 @@ async fn process_asset_common(
             .override_columns(&col_values);
         match process_spreadsheet_immediate(&opts).await {
             Ok(result) => {
-                /* if !is_preview {
-                  remove_uploaded_file(&file_path);
-                } */
                 let file_name_clone = file_name.clone();
                 tokio::spawn(async move {
                     let file_name = file_name_clone;
@@ -277,8 +265,9 @@ async fn process_asset_common(
                         println!("Deleted {} of {} files", num_deleted, num_files);
                     }
                 });
-                let mut response = result.to_json();
+                
                 if save_rows {
+                    let mut response = result.to_json();
                     let db = get_db_instance().await;
                     let core_options_json = core_options.to_json_value();
                     let rows = result
@@ -294,21 +283,24 @@ async fn process_asset_common(
                             "rows": num_rows
                         });
                     }
+                    Ok(Json(response).into_response()) 
+                } else {
+                    Ok(Json(result.to_json()).into_response())
                 }
-                Ok(Json(response).into_response())
+                // Return success response
             }
             Err(_) => {
                 remove_uploaded_file(&file_path);
                 Err((
                     StatusCode::NOT_ACCEPTABLE,
-                    "Failed to process file".to_string(),
-                ))
+                    json_error_response("Failed to process file")
+                )) // Return error response
             }
         }
-        } else {
-            Err((StatusCode::BAD_REQUEST, "No file name provided".to_string()))
-        }
+    } else {
+        Err((StatusCode::BAD_REQUEST, json_error_response("No file name provided"))) // Return error response
     }
+}
 
 fn json_error_response(message: &str) -> Json<serde_json::Value> {
     Json(json!({

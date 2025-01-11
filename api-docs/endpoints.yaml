@@ -1,0 +1,258 @@
+openapi: 3.0.0
+info:
+  title: Spreadsheet to JSON API
+  description: API for uploading, processing, and retrieving data from spreadsheets.
+  version: "1.0.0"
+paths:
+  /:
+    get:
+      summary: Retrieve API information
+      description: Retrieve information about the API.
+      responses:
+        '200':
+          description: API information retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title:
+                    type: string
+                    description: The title of the API.
+                  description:
+                    type: string
+                    description: A description of the API.
+                  version:
+                    type: string
+                    description: The version of the API.
+                  routes:
+                    type: array
+                    description: List of available routes.
+                    items:
+                      type: object
+                      description: Endpoint information.
+  /upload:
+    post:
+      summary: Upload a spreadsheet file
+      description: Upload a spreadsheet file to the server for processing.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The spreadsheet file to upload.
+                mode:
+                  type: string
+                  enum: [sync, preview]
+                  description: The read mode to use (sync or preview).
+                max:
+                  type: integer
+                  description: The maximum number of rows to read.
+                keys:
+                  type: string
+                  description: The keys to use for the columns.
+                cols:
+                  type: string
+                  description: Column settings.
+                sheet_index:
+                  type: integer
+                  description: The index of the sheet to read.
+                header_index:
+                  type: integer
+                  description: The index of the header row.
+      responses:
+        '200':
+          description: File uploaded successfully.
+  /process:
+    put:
+      summary: Re-process an uploaded spreadsheet file
+      description: Re-process an uploaded spreadsheet file with new criteria.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename:
+                  type: string
+                  description: The assigned name of the temporary file.
+                mode:
+                  type: string
+                  enum: [sync, preview]
+                  description: The read mode to use (sync or preview).
+                max:
+                  type: integer
+                  description: The maximum number of rows to read.
+                keys:
+                  type: string
+                  description: The keys to use for the columns.
+                lines:
+                  type: integer
+                  description: The number of lines to read.
+                cols:
+                  type: string
+                  description: Column settings.
+                sheet_index:
+                  type: integer
+                  description: The index of the sheet to read.
+                header_index:
+                  type: integer
+                  description: The index of the header row.
+      responses:
+        '200':
+          description: File processed successfully.
+  /dataset/{dataset_id}:
+    get:
+      summary: Retrieve dataset details
+      description: Retrieve details of a dataset with one or more spreadsheet imports
+      parameters:
+        - name: dataset_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the dataset
+        - name: f
+          in: query
+          schema:
+            type: string
+          description: Field name (snake_cased).
+        - name: v
+          in: query
+          schema:
+            type: string
+          description: Field value.
+        - name: o
+          in: query
+          schema:
+            type: string
+            enum: [eq, ne, gt, gte, lt, lte, in, nin, like, rgx, rcs, starts, ends]
+            description: These behave like their $-prefixed counterparts in MongoDB except for 'like' which means case-insensitive equality, rgx is case-insensitive, rcs is case-insensitive regex, starts (starting with) and ends (ending with).
+          description: Comparison operator.
+        - name: sort
+          in: query
+          schema:
+            type: string
+          description: Sort field.
+        - name: dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: Sort direction (asc or desc).
+        - name: start
+          in: query
+          schema:
+            type: integer
+          description: Start offset for pagination.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+          description: Number of rows per page.
+      responses:
+        '200':
+          description: Dataset details retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    description: Total number of rows in the dataset.
+                  limit:
+                    type: integer
+                    description: Maximum number of rows returned per request.
+                  skip:
+                    type: integer
+                    description: Number of rows skipped for pagination.
+                  dataset:
+                    type: object
+                    description: Metadata about the dataset.
+                    properties:
+                      _id:
+                        type: string
+                        description: Unique identifier of the dataset.
+                      name:
+                        type: string
+                        description: Original filename of the dataset.
+                      sheet_index:
+                        type: integer
+                        description: The index of the sheet being processed.
+                      options:
+                        type: object
+                        description: Options used during the dataset import.
+                        properties:
+                          sheet_index:
+                            type: integer
+                            description: Index of the sheet in the file.
+                          header_index:
+                            type: integer
+                            description: Row index for headers.
+                          mode:
+                            type: string
+                            enum: [sync, async, preview]
+                            description: Processing mode. Preview will return the first n rows of each sheet. Sync will process all rows (to the max specified) and return the result directly, async will only return an overview with deferred processing of large datasets.
+                      imports:
+                        type: array
+                        description: Details of each file uploaded with the same schema
+                        items:
+                          type: object
+                          properties:
+                            _id:
+                              type: string
+                              description: Unique identifier for the import.
+                            dt:
+                              type: string
+                              format: date-time
+                              description: Date and time of the import.
+                            filename:
+                              type: string
+                              description: Filename of the imported dataset.
+                            sheet_index:
+                              type: integer
+                              description: Sheet index of the imported data.
+                      created_at:
+                        type: string
+                        format: date-time
+                        description: Timestamp when the dataset was created.
+                      updated_at:
+                        type: string
+                        format: date-time
+                        description: Timestamp of the last update to the dataset.
+                      description:
+                        type: string
+                        description: Description of the dataset.
+                      title:
+                        type: string
+                        description: Title of the dataset.
+                      user_ref:
+                        type: string
+                        description: User reference or identifier.
+                  rows:
+                    type: array
+                    description: Rows of data within the dataset. The schema is dynamic and varies between datasets.
+                    items:
+                      type: object
+                      description: Row data. Structure is dataset-dependent.
+  /check-file/{file_name}:
+    get:
+      summary: Check if a file exists
+      description: Check if a file still exists in the temporary directory after initial upload. It will be automatically deleted within an hour. This is just to check if it needs to be uplaoded again before saving it.
+      parameters:
+        - name: file_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The name of the file to check.
+      responses:
+        '200':
+          description: File existence verified.

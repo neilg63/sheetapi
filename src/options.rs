@@ -1,13 +1,29 @@
 
 use std::str::FromStr;
+use axum::extract::Multipart;
 use bson::{doc, oid::ObjectId, Document};
 use fuzzy_datetime::{is_datetime_like, iso_fuzzy_string_to_datetime};
 use serde_json::{json, Value};
 use serde_with::chrono::{self, TimeZone};
 use serde::{Deserialize, Serialize};
-use axum_typed_multipart::{FieldData, TryFromMultipart};
+use axum_typed_multipart::{FieldData, TryFromField, TryFromMultipart};
 use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{IsNumeric, SimpleMatch, StripCharacters, ToSegments}};
 use tempfile::NamedTempFile;
+
+const DEFAULT_MAX_UPLOAD_SIZE: usize = 50 * 1024 * 1024;
+
+pub fn get_max_upload_size() -> usize {
+  if let Ok(max_size_val) = dotenv::var("MAX_UPLOAD_SIZE") {
+    if let Ok(size_val) = max_size_val.parse::<usize>() {
+      return size_val;
+    }
+  }
+  DEFAULT_MAX_UPLOAD_SIZE
+}
+
+pub fn get_max_body_size() -> usize {
+  get_max_upload_size() * 2 + 32 * 1024
+}
 
 #[derive(TryFromMultipart, Debug)]
 pub struct UploadAssetRequest {
@@ -19,6 +35,65 @@ pub struct UploadAssetRequest {
   pub cols: Option<String>,
   pub sheet_index: Option<usize>,
   pub header_index: Option<usize>,
+}
+
+impl UploadAssetRequest {
+  pub async fn from_multipart(mut multipart: Multipart) -> Self {
+    let mut file: Option<FieldData<NamedTempFile>> = None;
+    let mut mode: Option<String> = None;
+    let mut max: Option<usize> = None;
+    let mut keys: Option<String> = None;
+    let mut lines: Option<usize> = None;
+    let mut cols: Option<String> = None;
+    let mut sheet_index: Option<usize> = None;
+    let mut header_index: Option<usize> = None;
+
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap().to_string();
+        match name.as_str() {
+            "file" => {
+              let temp_file = NamedTempFile::new().unwrap();
+              let max_size = get_max_upload_size();
+              let field_data = FieldData::try_from_field(field, Some(max_size)).await.unwrap(); // Set max size to 10 MiB
+              file = Some(field_data);
+            }
+            "mode" => {
+                mode = Some(field.text().await.unwrap());
+            }
+            "max" => {
+                max = Some(field.text().await.unwrap().parse().unwrap());
+            }
+            "keys" => {
+                keys = Some(field.text().await.unwrap());
+            }
+            "lines" => {
+                lines = Some(field.text().await.unwrap().parse().unwrap());
+            }
+            "cols" => {
+                cols = Some(field.text().await.unwrap());
+            }
+            "sheet_index" => {
+                sheet_index = Some(field.text().await.unwrap().parse().unwrap());
+            }
+            "header_index" => {
+                header_index = Some(field.text().await.unwrap().parse().unwrap());
+            }
+            _ => {}
+        }
+    }
+
+    UploadAssetRequest {
+        file: file.unwrap(),
+        mode,
+        max,
+        keys,
+        lines,
+        cols,
+        sheet_index,
+        header_index,
+    }
+  }
+
 }
 
 #[derive(Serialize, Deserialize)]
