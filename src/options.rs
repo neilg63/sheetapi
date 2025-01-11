@@ -6,15 +6,17 @@ use fuzzy_datetime::{is_datetime_like, iso_fuzzy_string_to_datetime};
 use serde_json::{json, Value};
 use serde_with::chrono::{self, TimeZone};
 use serde::{Deserialize, Serialize};
-use axum_typed_multipart::{FieldData, TryFromField, TryFromMultipart};
+use axum_typed_multipart::{FieldData, TryFromField, TryFromMultipart, TypedMultipartError};
 use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{CharType, IsNumeric, SimpleMatch, StripCharacters, ToSegments}};
 use tempfile::NamedTempFile;
 
 const DEFAULT_MAX_UPLOAD_SIZE: usize = 50 * 1024 * 1024;
 
+const DEFAULT_MAX_OUTPUT_ROWS: usize = 1000;
+
 pub fn get_max_upload_size() -> usize {
   if let Ok(max_size_val) = dotenv::var("MAX_UPLOAD_SIZE") {
-    if let Ok(size_val) = max_size_val.parse::<usize>() {
+    if let Some(size_val) = parse_upload_size(&max_size_val) {
       return size_val;
     }
   }
@@ -23,6 +25,15 @@ pub fn get_max_upload_size() -> usize {
 
 pub fn get_max_body_size() -> usize {
   get_max_upload_size() * 2 + 32 * 1024
+}
+
+pub fn get_max_output_rows() -> usize {
+  if let Ok(max_rows_val) = dotenv::var("MAX_OUTPUT_ROWS") {
+    if let Ok(rows_val) = max_rows_val.parse::<usize>() {
+      return rows_val;
+    }
+  }
+  DEFAULT_MAX_OUTPUT_ROWS
 }
 
 #[derive(TryFromMultipart, Debug)]
@@ -38,7 +49,7 @@ pub struct UploadAssetRequest {
 }
 
 impl UploadAssetRequest {
-  pub async fn from_multipart(mut multipart: Multipart) -> Self {
+  pub async fn from_multipart(mut multipart: Multipart) -> Result<Self, TypedMultipartError> {
     let mut file: Option<FieldData<NamedTempFile>> = None;
     let mut mode: Option<String> = None;
     let mut max: Option<usize> = None;
@@ -52,10 +63,16 @@ impl UploadAssetRequest {
         let name = field.name().unwrap().to_string();
         match name.as_str() {
             "file" => {
-              let temp_file = NamedTempFile::new().unwrap();
-              let max_size = get_max_upload_size();
-              let field_data = FieldData::try_from_field(field, Some(max_size)).await.unwrap(); // Set max size to 10 MiB
-              file = Some(field_data);
+                let max_size = get_max_upload_size();
+                let field_data_result = FieldData::try_from_field(field, Some(max_size)).await;
+                match field_data_result {
+                    Ok(field_data) => {
+                      file = Some(field_data);
+                    }
+                    Err(e) => {
+                      return Err(e);
+                    }
+                }
             }
             "mode" => {
                 mode = Some(field.text().await.unwrap());
@@ -81,17 +98,23 @@ impl UploadAssetRequest {
             _ => {}
         }
     }
-
-    UploadAssetRequest {
-        file: file.unwrap(),
-        mode,
-        max,
-        keys,
-        lines,
-        cols,
-        sheet_index,
-        header_index,
+    if let Some(file_data) = file {
+      Ok(
+        UploadAssetRequest {
+          file: file_data,
+          mode,
+          max,
+          keys,
+          lines,
+          cols,
+          sheet_index,
+          header_index,
+        }
+      )
+    } else {
+      Err(TypedMultipartError::MissingField { field_name: "file".to_owned() })
     }
+    
   }
 
 }
@@ -460,13 +483,13 @@ fn str_to_like_pattern(value: &str) -> String {
   format!("^\\s*{}\\s*$", value.replace('.', ".\\.").replace('?', ".\\?").replace('%', ".*?").trim())
 }
 
-fn parse_upload_size(size: &str) -> Option<u64> {
+fn parse_upload_size(size: &str) -> Option<usize> {
   let size_str = size.to_lowercase();
   let digits = size_str.strip_non_digits();
   // add new methed strip_non_alpha to simple_string_patterns for next release
   let letters = size_str.filter_by_type(CharType::Alpha);
   let base_val = if digits.len() > 0 {
-    if let Ok(size_val) = digits.parse::<u64>() {
+    if let Ok(size_val) = digits.parse::<usize>() {
       Some(size_val)
     } else {
       None

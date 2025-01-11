@@ -12,27 +12,31 @@ use std::path::{Path, PathBuf};
 
 #[axum::debug_handler]
 pub async fn upload_asset(multipart: Multipart) -> impl IntoResponse {
-    let request = UploadAssetRequest::from_multipart(multipart).await;
-    let (tmp_directory, sub_directory) = get_tmp_and_sub_directories();
-    let file_name = build_filename(&request.file);
-    let file_path = Path::new(tmp_directory.as_str())
-        .join(sub_directory.as_str())
-        .join(&file_name);
-
-    let core_options = &request.to_core_options();
-     // Save the file to the temporary directory
-    if let Ok(_fn) = ensure_directory_and_construct_path(&tmp_directory, &sub_directory, &file_name)
-    {
-        save_file(&request.file, &file_path).ok();
-    } else {
-        return (StatusCode::NOT_FOUND, json_error_response("Failed to access or create directory.")).into_response();
-    }
-    if core_options.filename.is_none() {
-        return (StatusCode::BAD_REQUEST, json_error_response("No filename provided")).into_response();
-    } 
-    match process_asset_common(file_path, &core_options, false).await {
-        Ok(response) => response.into_response(),
-        Err((status, message)) => (status, message).into_response(),
+    let request_result = UploadAssetRequest::from_multipart(multipart).await;
+    match request_result {
+        Ok(request) => {
+            let (tmp_directory, sub_directory) = get_tmp_and_sub_directories();
+            let file_name = build_filename(&request.file);
+            let file_path = Path::new(tmp_directory.as_str())
+                .join(sub_directory.as_str())
+                .join(&file_name);
+            let core_options = &request.to_core_options();
+            // Save the file to the temporary directory
+            if let Ok(_fn) = ensure_directory_and_construct_path(&tmp_directory, &sub_directory, &file_name)
+            {
+                save_file(&request.file, &file_path).ok();
+            } else {
+                return (StatusCode::NOT_FOUND, json_error_response("Failed to access or create directory.")).into_response();
+            }
+            if core_options.filename.is_none() {
+                return (StatusCode::BAD_REQUEST, json_error_response("No filename provided")).into_response();
+            } 
+            match process_asset_common(file_path, &core_options, true).await {
+                Ok(response) => response.into_response(),
+                Err((status, message)) => (status, message).into_response(),
+            }
+        }
+        Err(error) => (StatusCode::BAD_REQUEST, json_error_response(&error.to_string())).into_response(),
     }
 }
 
@@ -276,11 +280,24 @@ async fn process_asset_common(
                         .map(|r| json!(r))
                         .collect::<Vec<Value>>();
                     let import_info = db.save_import_with_rows(&core_options_json, &rows, import_id_opt, append).await;
+                    
                     if let Some((dataset_id, import_id, num_rows)) = import_info {
+                        let max_output_rows = get_max_output_rows();
+                        let (limit_rows, num_showing) = if num_rows > max_output_rows {
+                            (true, max_output_rows)
+                        } else {
+                            (false, num_rows)
+                        };
+                        if limit_rows {
+                            response["data"] = json!(rows[..max_output_rows]);
+                        } else {
+                            response["data"] = json!(rows);
+                        }
                         response["dataset"] = json!({
                             "id": json!(dataset_id),
                             "import_id": json!(import_id),
-                            "rows": num_rows
+                            "rows": num_rows,
+                            "showing": num_showing
                         });
                     }
                     Ok(Json(response).into_response()) 
