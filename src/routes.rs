@@ -108,6 +108,9 @@ pub async fn welcome() -> impl IntoResponse {
         "title": "Spreadsheet to JSON API",
         "description": "Upload spreadsheets (Excel: xlsx, xlsb, xls, LibreOffice: odt, CSV and TSV), convert them to JSON and create a Web endpoint",
         "version": "0.1.0",
+        "max_upate_size": get_max_upload_size(),
+        "max_body_size": get_max_body_size(),
+        "max_output_rows": get_max_output_rows(),
         "routes": {
             "upload": {
                 "method": "POST",
