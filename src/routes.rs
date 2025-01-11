@@ -31,7 +31,7 @@ pub async fn upload_asset(multipart: Multipart) -> impl IntoResponse {
             if core_options.filename.is_none() {
                 return (StatusCode::BAD_REQUEST, json_error_response("No filename provided")).into_response();
             } 
-            match process_asset_common(file_path, &core_options, true).await {
+            match process_asset_common(file_path, &core_options, false).await {
                 Ok(response) => response.into_response(),
                 Err((status, message)) => (status, message).into_response(),
             }
