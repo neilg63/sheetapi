@@ -199,7 +199,7 @@ async fn process_asset_common(
         .parse()
         .unwrap_or(10000);
     let max_preview_limit = dotenv::var("MAX_PREVIEW_LIMIT")
-        .unwrap_or(String::from("50"))
+        .unwrap_or(String::from("200"))
         .parse()
         .unwrap_or(200);
 

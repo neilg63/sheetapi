@@ -460,3 +460,89 @@ fn str_to_like_pattern(value: &str) -> String {
   format!("^\\s*{}\\s*$", value.replace('.', ".\\.").replace('?', ".\\?").replace('%', ".*?").trim())
 }
 
+fn parse_upload_size(size: &str) -> Option<u64> {
+  let size_str = size.to_lowercase();
+  let digits = size_str.strip_non_digits();
+  let letters = size_str.strip_non_digits();
+  let base_val = if digits.len() > 0 {
+    if let Ok(size_val) = digits.parse::<u64>() {
+      Some(size_val)
+    } else {
+      None
+    }
+  } else {
+    None
+  };
+  if let Some(val) = base_val {
+    if letters.starts_with("k") {
+      Some(val * 1024)
+    } else if size_str.starts_with("m") {
+      Some(val * 1024 * 1024)
+    } else if size_str.starts_with("g") {
+      Some(val * 1024 * 1024 * 1024)
+    } else {
+      base_val
+    }
+  } else {
+    None
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[test]
+  fn test_cast_data_type() {
+    let float = CastDataType::from_str("float");
+    assert_eq!(float, CastDataType::Float);
+    let integer = CastDataType::from_str("int");
+    assert_eq!(integer, CastDataType::Integer);
+    let date = CastDataType::from_str("date");
+    assert_eq!(date, CastDataType::Date);
+    let datetime = CastDataType::from_str("datetime");
+    assert_eq!(datetime, CastDataType::DateTime);
+    let boolean = CastDataType::from_str("bool");
+    assert_eq!(boolean, CastDataType::Boolean);
+    let string = CastDataType::from_str("string");
+    assert_eq!(string, CastDataType::String);
+  }
+
+  #[test]
+  fn test_cast_data_type_numeric() {
+    let float = CastDataType::from_str("float");
+    assert_eq!(float.is_numeric(), true);
+    let integer = CastDataType::from_str("int");
+    assert_eq!(integer.is_numeric(), true);
+    let date = CastDataType::from_str("date");
+    assert_eq!(date.is_numeric(), false);
+    let datetime = CastDataType::from_str("datetime");
+    assert_eq!(datetime.is_numeric(), false);
+    let boolean = CastDataType::from_str("bool");
+    assert_eq!(boolean.is_numeric(), false);
+    let string = CastDataType::from_str("string");
+    assert_eq!(string.is_numeric(), false);
+  }
+
+  #[test]
+  fn test_cast_data_type_bool() {
+    let float = CastDataType::from_str("float");
+    assert_eq!(float.is_bool(), false);
+    let integer = CastDataType::from_str("int");
+    assert_eq!(integer.is_bool(), false);
+    let date = CastDataType::from_str("date");
+    assert_eq!(date.is_bool(), false);
+    let datetime = CastDataType::from_str("datetime");
+    assert_eq!(datetime.is_bool(), false);
+    let boolean = CastDataType::from_str("bool");
+    assert_eq!(boolean.is_bool(), true);
+    let string = CastDataType::from_str("string");
+    assert_eq!(string.is_bool(), false);
+  }
+
+  #[test]
+  fn test_cast_data_type_datelike() {
+    let float = CastDataType::from_str("float");
+    assert_eq!(float.is_datelike(), false);
+    let integer = CastDataType::from_str(");
+}

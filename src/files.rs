@@ -7,6 +7,7 @@ use tokio::time::sleep;
 use axum_typed_multipart::FieldData;
 use tempfile::NamedTempFile;
 
+const DEFAULT_DELETE_TMP_FILES_AFTER_SECONDS: u64 = 600;
 
 #[derive(Serialize, Deserialize)]
 pub struct FileInfo {
@@ -104,7 +105,7 @@ fn tmp_file_delete_after_seconds() -> u64 {
     dotenv::var("DELETE_TMP_FILES_AFTER_SECONDS")
         .unwrap_or_else(|_| String::from("600"))
         .parse()
-        .unwrap_or(600)
+        .unwrap_or(DEFAULT_DELETE_TMP_FILES_AFTER_SECONDS)
   }
   
   pub async fn perform_cleanup(current_fn: Option<&str>) -> Result<(usize, usize), std::io::Error> {
