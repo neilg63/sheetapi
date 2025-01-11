@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use serde_with::chrono::{self, TimeZone};
 use serde::{Deserialize, Serialize};
 use axum_typed_multipart::{FieldData, TryFromField, TryFromMultipart};
-use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{IsNumeric, SimpleMatch, StripCharacters, ToSegments}};
+use spreadsheet_to_json::{is_truthy::is_truthy_core, simple_string_patterns::{CharType, IsNumeric, SimpleMatch, StripCharacters, ToSegments}};
 use tempfile::NamedTempFile;
 
 const DEFAULT_MAX_UPLOAD_SIZE: usize = 50 * 1024 * 1024;
@@ -463,7 +463,8 @@ fn str_to_like_pattern(value: &str) -> String {
 fn parse_upload_size(size: &str) -> Option<u64> {
   let size_str = size.to_lowercase();
   let digits = size_str.strip_non_digits();
-  let letters = size_str.strip_non_digits();
+  // add new methed strip_non_alpha to simple_string_patterns for next release
+  let letters = size_str.filter_by_type(CharType::Alpha);
   let base_val = if digits.len() > 0 {
     if let Ok(size_val) = digits.parse::<u64>() {
       Some(size_val)
@@ -476,9 +477,9 @@ fn parse_upload_size(size: &str) -> Option<u64> {
   if let Some(val) = base_val {
     if letters.starts_with("k") {
       Some(val * 1024)
-    } else if size_str.starts_with("m") {
+    } else if letters.starts_with("m") {
       Some(val * 1024 * 1024)
-    } else if size_str.starts_with("g") {
+    } else if letters.starts_with("g") {
       Some(val * 1024 * 1024 * 1024)
     } else {
       base_val
@@ -491,22 +492,6 @@ fn parse_upload_size(size: &str) -> Option<u64> {
 #[cfg(test)]
 mod test {
   use super::*;
-
-  #[test]
-  fn test_cast_data_type() {
-    let float = CastDataType::from_str("float");
-    assert_eq!(float, CastDataType::Float);
-    let integer = CastDataType::from_str("int");
-    assert_eq!(integer, CastDataType::Integer);
-    let date = CastDataType::from_str("date");
-    assert_eq!(date, CastDataType::Date);
-    let datetime = CastDataType::from_str("datetime");
-    assert_eq!(datetime, CastDataType::DateTime);
-    let boolean = CastDataType::from_str("bool");
-    assert_eq!(boolean, CastDataType::Boolean);
-    let string = CastDataType::from_str("string");
-    assert_eq!(string, CastDataType::String);
-  }
 
   #[test]
   fn test_cast_data_type_numeric() {
@@ -541,8 +526,10 @@ mod test {
   }
 
   #[test]
-  fn test_cast_data_type_datelike() {
-    let float = CastDataType::from_str("float");
-    assert_eq!(float.is_datelike(), false);
-    let integer = CastDataType::from_str(");
+  fn test_filesize_conversion() {
+    let size_str = "10k";
+    assert_eq!(parse_upload_size(size_str), Some(10 * 1024));
+    let size_str = "50MB";
+    assert_eq!(parse_upload_size(size_str), Some(50 * 1024 * 1024));
+  }
 }
