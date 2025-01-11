@@ -554,5 +554,8 @@ mod test {
     assert_eq!(parse_upload_size(size_str), Some(10 * 1024));
     let size_str = "50MB";
     assert_eq!(parse_upload_size(size_str), Some(50 * 1024 * 1024));
+
+    let size_str = "25MB";
+    assert_eq!(parse_upload_size(size_str), Some(25 * 1024 * 1024));
   }
 }
